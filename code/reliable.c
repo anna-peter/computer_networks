@@ -67,6 +67,7 @@ const struct config_common *cc)
 
     /* Do any other initialization you need here... */
     r->cc = cc;
+
     // ...
     r->send_buffer = xmalloc(sizeof(buffer_t));
     r->send_buffer->head = NULL;
@@ -108,6 +109,9 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
         fprintf(stderr, "expected packet size differs from actual packet size");
         abort ();
     }
+    if(!cksum(pkt->data,n)) {
+        return 0;
+    }
     if (ntohs(pkt->len) == 8) {
         //pkt is an ack packet
         //ack: all packets until but excluding that seqno
@@ -124,12 +128,11 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 
     }
     //data packet of len 12
-    else if (ntohs(pkt->len) ==12) {
+    else if (ntohs(pkt->len) ==12 && /*buffer is empty*/) {
         //end of file, 0 payload
         //receive zero-len payload and have written contents of prev 
         //packets (TODO: check this)--> send EOF 
         conn_output(r->c,r->send_buffer,0);
-        //should destroy?
         rel_destroy(r);
 
     }
