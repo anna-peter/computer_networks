@@ -23,17 +23,17 @@ struct reliable_state {
 
     conn_t *c;			/* This is the connection object */
 
-    /* Add your own data fields below this */
-    // ...
     buffer_t* send_buffer;
-    // ...
     buffer_t* rec_buffer;
-    // ...
-    config_common *cc;
+    
+    /* Add your own data fields below this */
+
+    config_common *cc; //common config - use for window, timeout
     int base_seq; //lowest received packet seqno
-    int window; //window size
-
-
+    void * temp_buf; //buffer of values to be sent
+    uint32_t rcv_nxt; //next seqno expected: rec_buffer->next->packet->seqno
+    int send_nxt; //next seqno which is unassigned (to be sent)
+    int send_wndw; //send window
 
 };
 rel_t *rel_list;
@@ -67,6 +67,11 @@ const struct config_common *cc)
 
     /* Do any other initialization you need here... */
     r->cc = cc;
+    r->temp_buf = xmalloc(500);
+    r->send_nxt = 1;
+    r->rcv_nxt = 1;
+    r->send_wndw = r->cc->window; //not sure abt this sndnxt-base_seq
+    r->base_seq = 1;
 
     // ...
     r->send_buffer = xmalloc(sizeof(buffer_t));
@@ -103,32 +108,42 @@ void
 rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
     
-    //rcv.nxt= next seqno expected
-
+    if (nthos(pkt->len>512 || nthos(pkt->len)<0)) {
+        fprintf(stderr, "packet length out of bounds");
+        abort ();
+    }
     if (nthos(pkt->len) != n) {
         fprintf(stderr, "expected packet size differs from actual packet size");
         abort ();
     }
-    if(!cksum(pkt->data,n)) {
-        return 0;
+    if (!cksum(pkt->data,n)) {
+        fprintf(stderr,"packet checksum doesnt fit");
+        //packet has been corrupted --> directly return
+        //need to send ack?
+        return;
     }
+    //check if packet's seqno is lower than next expected rec seqno
+   // if (ntohl(pkt->seqno < r->rcv_nxt)) {
+        //send ack ?
+  //  }
+    //ntohs for len, ntohl for seqno
     if (ntohs(pkt->len) == 8) {
         //pkt is an ack packet
-        //ack: all packets until but excluding that seqno
-        //check if it is the expected one:
-        //update lowest seq number if received packet
-        if (pkt->ackno>r->base_seq) {
+        //ack: all packets until but excluding that seqno are acked
+        //update lowest seq number if received packet has a higher ackno
+        //note that an ack means that all packets with lower ackno have also been received!
+        //(no selective acks)
+        if (pkt->ackno > r->base_seq) {
             //slide window:
             buffer_remove(r->rec_buffer,pkt->seqno)
         }
         //send other packets
         rel_read(r);
-        //set snduna = max(snduna,ackno)
         //rcvwindow doesnt change
 
     }
     //data packet of len 12
-    else if (ntohs(pkt->len) ==12 && /*buffer is empty*/) {
+    else if (ntohs(pkt->len) ==12) {
         //end of file, 0 payload
         //receive zero-len payload and have written contents of prev 
         //packets (TODO: check this)--> send EOF 
@@ -139,54 +154,83 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
     else {
         //len>8
         //data packet, receiver functionality
-        
-        //this code is to get current time - for last retransmit
-        struct timespec spec;
-        clock_gettime(CLOCK_MONOTONIC, &spec); 
-        long nowMs;
-        nowMs = round(spec.tv_nsec / 1.0e6);
 
-        //add to output buffer
-        buffer_insert(r->send_buffer,pkt,nowMs);
-        rel_output(r)
+        //add to output buffer = rcv buffer (=packets that are printed to stdout)
+        buffer_insert(r->rec_buffer,pkt,0);
+        //the received packet is the expected one (lowest seqno in curr windw)
+        if (ntohl(pkt->seqno) == r->rcv_nxt) {
+            //add to outpt buf & write to output
+            rel_output(r);
+            //conn_sendpkt(r->c,r->,8);
+        }
         
     }
-    //rel_destroy(r);
 //TODO: buffer out of sequence packets --> how do we know if it's out of sequence/
     //what is expected seqno?
-    /* Your logic implementation here */
 }
 
 /*
 reads values from stdin and writes them into the send buffer; then sends them
 
 */
+
 void
 rel_read (rel_t *s)
 {
-    sendPkt = conn_input(s);
-    isSent = conn_sendpkt(sendPkt, s->send_buffer->head->packet);
-    if (isSent == -1) {
-        rel_destroy(s)
-    }
-    else if (isSent == 0) {
-        //no data is available
-        //library will call again once data is available
-        return;
+    //check if the next packet is in sending window (= lowest ack + window size)
+    while (s->rcv_nxt < s->base_seq + s->cc->window) {
+        //get data from conn_input
+        //returns number of bytes received
+        sendPkt = conn_input(s->c, s->temp_buf, 500); 
+        if (sendPkt == -1) { //either error or EOF
+            rel_destroy(s);
+        }
+        
+
+        else if (sendPkt == 0) {
+            //no data is available
+            //library will call again once data is available
+            return;
+        }
+        else {
+            //we got some data that we can now send
+           // packet_t* pkt = xmalloc(sendPkt+12);
+            isSent = conn_sendpkt(s->c, s->temp_buf->head->packet, sendPkt);
+            //what i don't understand: we get a packet and then we send it using
+            //sendpkt, but then why do we need send_buffer? what does it do?
+
+        }
+        s->send_nxt++;
     }
     
     /* Your logic implementation here */
 }
 
+/*
+writes data from output buffer to std output
+go thru receive buffer
+*/
 void
 rel_output (rel_t *r)
 {
+
     //sndwnd = sndnxt-snduna; //not a constant
+    //update send window
+    r->send_wndw = r->send_nxt - r->base_seq;
     space = conn_bufspace(r->c);
-    out = conn_output(r->c, r->send_buffer,r->send_buffer->head->packet->len)
+    //send or rec buf? probs rec (bc we print (=output) received data)
+    out = conn_output(r->c, r->rec_buffer,nthos(r->rec_buffer->head->packet->len));
     if (out == -1) {
-        fprintf(stderr,"buffer couldn't output")
-    } 
+        fprintf(stderr,"buffer couldn't output");
+    } else {
+        if (space < r->send_wndw) {
+            conn_sendpkt();
+
+        } else {
+            buffer_insert(r->temp_buf, );
+        }
+    }
+    buffer_remove(r->rec_buffer,r->rcv_nxt);
     /* Your logic implementation here */
 }
 
@@ -199,18 +243,31 @@ rel_timer ()
     
     while (current != NULL) {
         // ...
-        retr_timer = current->cc->timeout; //in millisecs
-        struct timespec spec;
-        clock_gettime(CLOCK_MONOTONIC, &spec); 
-        long nowMs;
-        nowMs = round(spec.tv_nsec / 1.0e6); //gives us time in ms
-        time_passed = now - current->send_buffer->head->last_retransmit;
-        if (time_passed > retr_timer) {
-            //packet should be resent
-            rel_output(current);
-        }       
-        current = current->next;
+        //for each sender, go through all nodes and check timeout
+        buffer_node_t curr_node = buffer_get_first(current->send_buffer);
+        while (curr_node != NULL) {
+            retr_timer = current->cc->timeout; //in millisecs
+            time_passed = getTimeMs() - curr_node->last_retransmit;
+            if (time_passed >= retr_timer) {
+                //packet should be resent
+                conn_sendpkt(current->c, &curr_node->packet,nthos(curr_node->packet->len));
+                //update the time of now to that packet
+                buffer_node_t new = {curr_node->packet,getTimeMs(),curr_node->next};
+                *curr_node = new;
+            }       
+
+        }
+        current = rel_list->next;
     }
+}
+
+//uses the internal clock to return the current time in milliseconds
+long getTimeMs() {
+    struct timespec spec;
+    clock_gettime(CLOCK_MONOTONIC, &spec); 
+    long nowMs;
+    nowMs = round(spec.tv_nsec / 1.0e6); //gives us time in ms  
+    return nowMs;
 }
 /*
 to run code (test):
