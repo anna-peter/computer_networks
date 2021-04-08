@@ -45,6 +45,7 @@ rel_create (conn_t *c, const struct sockaddr_storage *ss,
 const struct config_common *cc)
 {
     rel_t *r;
+    fprintf(stderr,"did this commit work?");
 
     r = xmalloc (sizeof (*r));
     memset (r, 0, sizeof (*r));
