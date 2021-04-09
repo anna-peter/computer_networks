@@ -34,6 +34,7 @@ struct reliable_state {
     uint32_t rcv_nxt; //next seqno expected: rec_buffer->next->packet->seqno
     int send_nxt; //next seqno which is unassigned (to be sent)
     int send_wndw; //send window
+    int base_send; //lowest sent packet seqno
 
 };
 rel_t *rel_list;
@@ -110,11 +111,11 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
     
     if (nthos(pkt->len>512 || nthos(pkt->len)<0)) {
         fprintf(stderr, "packet length out of bounds");
-        abort ();
+        return;
     }
     if (nthos(pkt->len) != n) {
         fprintf(stderr, "expected packet size differs from actual packet size");
-        abort ();
+        return;
     }
     if (!cksum(pkt->data,n)) {
         fprintf(stderr,"packet checksum doesnt fit");
@@ -135,7 +136,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
         //(no selective acks)
         if (pkt->ackno > r->base_seq) {
             //slide window:
-            buffer_remove(r->rec_buffer,pkt->seqno)
+            buffer_remove(r->rec_buffer,pkt->seqno);
         }
         //send other packets
         rel_read(r);
@@ -154,13 +155,19 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
     else {
         //len>8
         //data packet, receiver functionality
+        //send ack
+        //test maybe need htohs(pkt->len)
+        ack_packet ack = {cksum(pkt->data,pkt->len),htohs(pkt->len),htohl(r->base_seq+1)};
+        conn_sendpkt(r->c,ack,8);
+        free(ack);
 
         //add to output buffer = rcv buffer (=packets that are printed to stdout)
-        buffer_insert(r->rec_buffer,pkt,0);
+        buffer_insert(r->rcv_buffer,pkt,0);
         //the received packet is the expected one (lowest seqno in curr windw)
-        if (ntohl(pkt->seqno) == r->rcv_nxt) {
+        if (ntohl(pkt->seqno) == (r->base_seq)) {
             //add to outpt buf & write to output
             rel_output(r);
+            r->base_seq++;
             //conn_sendpkt(r->c,r->,8);
         }
         
@@ -177,15 +184,19 @@ reads values from stdin and writes them into the send buffer; then sends them
 void
 rel_read (rel_t *s)
 {
+    //sndwnd = sndnxt-snduna; //not a constant
+    //update send window
+    s->send_wndw = s->send_nxt - s->base_send;
+
     //check if the next packet is in sending window (= lowest ack + window size)
-    while (s->rcv_nxt < s->base_seq + s->cc->window) {
+    while (s->send_nxt < s->base_send + s->send_wndw) {
         //get data from conn_input
         //returns number of bytes received
-        sendPkt = conn_input(s->c, s->temp_buf, 500); 
+        int sendPkt = conn_input(s->c, s->temp_buf, 500); 
+
         if (sendPkt == -1) { //either error or EOF
             rel_destroy(s);
-        }
-        
+        }      
 
         else if (sendPkt == 0) {
             //no data is available
@@ -194,13 +205,30 @@ rel_read (rel_t *s)
         }
         else {
             //we got some data that we can now send
+
+            //loop through all nodes in temp_buf (there are exactly sendPkt #)
+            buffer_node* next = s->temp_buf->head;
+            packet_t sendme = xmalloc(sendPkt+12);
+            for (int i=0;i<sendPkt;i++) {
+                sendme->data[i] = ((char *)s->temp_buf)[i]; //cast to char pointer from void *
+
+            }
+            sendme->len = htons(12+sendPkt); 
+            sendme->cksum = cksum(sendme->data,sendme->len);
+            sendme->ackno = htonl(s->rcv_next);
+            sendme->seqno = htonl(s->send_nxt);
+            int isSent = conn_sendpkt(s->c,sendme,ntohs(sendme->len));
+            buffer_insert(s->send_buffer,sendme,getTimeMs());
+            free(sendme);
+
            // packet_t* pkt = xmalloc(sendPkt+12);
-            isSent = conn_sendpkt(s->c, s->temp_buf->head->packet, sendPkt);
             //what i don't understand: we get a packet and then we send it using
             //sendpkt, but then why do we need send_buffer? what does it do?
+            //only trieed to send it w sendpkt, need to put into buffer until acked
 
         }
         s->send_nxt++;
+        s->send_wndw = s->send_nxt - s->base_send;
     }
     
     /* Your logic implementation here */
@@ -214,23 +242,24 @@ void
 rel_output (rel_t *r)
 {
 
-    //sndwnd = sndnxt-snduna; //not a constant
-    //update send window
-    r->send_wndw = r->send_nxt - r->base_seq;
-    space = conn_bufspace(r->c);
-    //send or rec buf? probs rec (bc we print (=output) received data)
-    out = conn_output(r->c, r->rec_buffer,nthos(r->rec_buffer->head->packet->len));
-    if (out == -1) {
-        fprintf(stderr,"buffer couldn't output");
-    } else {
-        if (space < r->send_wndw) {
-            conn_sendpkt();
+    int rec_wnd = r->cc->window; //doesnt change
+    size_t space = conn_bufspace(r->c);
+    buffer_node_t* curr_node = r->rec_buffer->head;
+    //go through nodes in rec_buffer and output in-order packets
+    //always look for base_seq, and if that packet found, increase base_seq
 
-        } else {
-            buffer_insert(r->temp_buf, );
-        }
+
+    while (r->base_seq + space < rec_wnd) { //while there's space in the rec wnd to print packets
+        //get packet from rec_buffer
+        int out = conn_output(r->c, r->rec_buffer,nthos(curr_node->packet->len));
+
+        if (out == -1) {
+            fprintf(stderr,"buffer couldn't output");
+        } 
+        buffer_remove(r->rec_buffer,r->base_seq);
+        space = conn_bufspace(r->c);
+
     }
-    buffer_remove(r->rec_buffer,r->rcv_nxt);
     /* Your logic implementation here */
 }
 
@@ -246,8 +275,8 @@ rel_timer ()
         //for each sender, go through all nodes and check timeout
         buffer_node_t curr_node = buffer_get_first(current->send_buffer);
         while (curr_node != NULL) {
-            retr_timer = current->cc->timeout; //in millisecs
-            time_passed = getTimeMs() - curr_node->last_retransmit;
+            long retr_timer = current->cc->timeout; //in millisecs
+            long time_passed = getTimeMs() - curr_node->last_retransmit;
             if (time_passed >= retr_timer) {
                 //packet should be resent
                 conn_sendpkt(current->c, &curr_node->packet,nthos(curr_node->packet->len));
