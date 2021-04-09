@@ -263,10 +263,9 @@ rel_timer ()
 
 //uses the internal clock to return the current time in milliseconds
 long getTimeMs() {
-    struct timespec spec;
-    clock_gettime(CLOCK_MONOTONIC, &spec); 
-    long nowMs;
-    nowMs = round(spec.tv_nsec / 1.0e6); //gives us time in ms  
+    struct timeval now; 
+    gettimeofday(&now , NULL) ; 
+    long nowMs = now.tvsec ∗ 1000 + now.tvusec / 1000 ;
     return nowMs;
 }
 /*
