@@ -214,6 +214,7 @@ rel_read (rel_t *s)
 
             }
             sendme->len = htons(12+sendPkt); 
+            sendme->cksum = 0x00;
             sendme->cksum = cksum(sendme->data,sendme->len);
             sendme->ackno = htonl(s->rcv_next);
             sendme->seqno = htonl(s->send_nxt);
@@ -244,22 +245,20 @@ rel_output (rel_t *r)
 
     int rec_wnd = r->cc->window; //doesnt change
     size_t space = conn_bufspace(r->c);
-    buffer_node_t* curr_node = r->rec_buffer->head;
     //go through nodes in rec_buffer and output in-order packets
     //always look for base_seq, and if that packet found, increase base_seq
-
-
-    while (r->base_seq + space < rec_wnd) { //while there's space in the rec wnd to print packets
-        //get packet from rec_buffer
-        int out = conn_output(r->c, r->rec_buffer,nthos(curr_node->packet->len));
-
-        if (out == -1) {
+    while (curr_node != NULL ) {
+        buffer_node_t curr_node = buffer_get_first(r->rec_buffer);
+        int out = conn_output(r->c,r->rec_buffer,space);
+        if (out==-1) {
             fprintf(stderr,"buffer couldn't output");
-        } 
-        buffer_remove(r->rec_buffer,r->base_seq);
+        }
+        buffer_remove(r->rec_buffer,curr_node->packet->seqno);
         space = conn_bufspace(r->c);
 
     }
+
+
     /* Your logic implementation here */
 }
 
