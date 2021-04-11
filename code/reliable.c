@@ -31,7 +31,7 @@ struct reliable_state {
     struct config_common *cc; //common config - use for window, timeout
     int base_seq; //lowest received packet seqno
     void * temp_buf; //buffer of values to be sent
-    uint32_t rcv_nxt; //next seqno expected: rec_buffer->next->packet->seqno
+    int rcv_nxt; //next seqno expected: rec_buffer->next->packet->seqno
     int send_nxt; //next seqno which is unassigned (to be sent)
     int send_wndw; //send window
     int base_send; //lowest sent packet seqno
@@ -135,7 +135,7 @@ void
 rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
     
-    if (nthos(pkt->len>512 || nthos(pkt->len)<0)) {
+    if (ntohs(pkt->len>512 || ntohs(pkt->len)<0)) {
         fprintf(stderr, "packet length out of bounds");
         return;
     }
@@ -241,7 +241,7 @@ rel_read (rel_t *s)
             sendme->len = htons(12+sendPkt); 
             sendme->cksum = 0x0000;
             sendme->cksum = cksum(sendme,sendme->len);
-            sendme->ackno = htonl(s->rcv_next);
+            sendme->ackno = htonl(s->rcv_nxt);
             sendme->seqno = htonl(s->send_nxt);
             int isSent = conn_sendpkt(s->c,sendme,ntohs(sendme->len));
             buffer_insert(s->send_buffer,sendme,getTimeMs());
@@ -272,7 +272,7 @@ rel_output (rel_t *r)
     size_t space = conn_bufspace(r->c);
     //go through nodes in rec_buffer and output in-order packets
     //always look for base_seq, and if that packet found, increase base_seq
-    buffer_node_t curr_node = buffer_get_first(r->rec_buffer);
+    buffer_node_t* curr_node = buffer_get_first(r->rec_buffer);
     while (curr_node != NULL ) {
         int out = conn_output(r->c,r->rec_buffer,space);
         if (out==-1) {
@@ -305,7 +305,7 @@ rel_timer ()
             long time_passed = now - curr_node->last_retransmit;
             if (time_passed >= retr_timer) {
                 //packet should be resent
-                conn_sendpkt(current->c, &curr_node->packet,nthos(curr_node->packet->len));
+                conn_sendpkt(current->c, &curr_node->packet,ntohs(curr_node->packet->len));
                 //update the time of now to that packet
                 buffer_node_t new = {curr_node->packet,getTimeMs(),curr_node->next};
                 *curr_node = new;
