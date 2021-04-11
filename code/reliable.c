@@ -155,9 +155,8 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
         //len>8
         //data packet, receiver functionality
         //send ack
-        //test maybe need htohs(pkt->len)
-        struct ack_packet ack = {cksum(pkt->data,pkt->len),htohs(pkt->len),htohl(r->base_seq+1)};
-        conn_sendpkt(r->c,ack,8);
+        packet_t ack = create_ack(r->base_seq+1);
+        conn_sendpkt(r->c,ack,htons(8));
         free(ack);
 
         //add to output buffer = rcv buffer (=packets that are printed to stdout)
@@ -173,6 +172,25 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
     }
 //TODO: buffer out of sequence packets --> how do we know if it's out of sequence/
     //what is expected seqno?
+}
+//creates an ack 
+packet_t* create_ack(uint32_t ackno) {
+    packet_t pkt = xmalloc(8);
+    pkt->cksum = 0x0000;
+    pkt->cksum = cksum(pkt,8);
+    pkt->len = htons(8);
+    pkt->ackno = htonl(ackno);
+    return pkt;
+}
+//data = char array of 500
+//creates a data packet when given pointer to packet which already contains data
+packet_t* create_data(packet_t* pkt, uint16_t len, uint32_t ackno, uint32_t seqno) {
+    pkt->cksum = 0x0000;
+    pkt->cksum = cksum(pkt,len);
+    pkt->len = htons(len);
+    pkt->ackno = htonl(ackno);
+    pkt->seqno = htonl(seqno);
+    return pkt;
 }
 
 /*
@@ -213,8 +231,8 @@ rel_read (rel_t *s)
 
             }
             sendme->len = htons(12+sendPkt); 
-            sendme->cksum = 0x00;
-            sendme->cksum = cksum(sendme->data,sendme->len);
+            sendme->cksum = 0x0000;
+            sendme->cksum = cksum(sendme,sendme->len);
             sendme->ackno = htonl(s->rcv_next);
             sendme->seqno = htonl(s->send_nxt);
             int isSent = conn_sendpkt(s->c,sendme,ntohs(sendme->len));
