@@ -37,6 +37,33 @@ struct reliable_state {
     int base_send; //lowest sent packet seqno
 };
 rel_t *rel_list;
+//uses the internal clock to return the current time in milliseconds
+long getTimeMs() {
+    struct timeval now;
+    gettimeofday(&now,NULL);
+    return now.tv_sec * 1000 + now.tv_usec / 1000;
+}
+
+//creates an ack 
+packet_t* create_ack(uint32_t ackno) {
+    packet_t* pkt = xmalloc(8);
+    pkt->cksum = 0x0000;
+    pkt->cksum = cksum(pkt,8);
+    pkt->len = htons(8);
+    pkt->ackno = htonl(ackno);
+    return pkt;
+}
+
+//data = char array of 500
+//creates a data packet when given pointer to packet which already contains data
+packet_t* create_data(packet_t* pkt, uint16_t len, uint32_t ackno, uint32_t seqno) {
+    pkt->cksum = 0x0000;
+    pkt->cksum = cksum(pkt,len);
+    pkt->len = htons(len);
+    pkt->ackno = htonl(ackno);
+    pkt->seqno = htonl(seqno);
+    return pkt;
+}
 
 /* Creates a new reliable protocol session, returns NULL on failure.
 * ss is always NULL */
@@ -116,7 +143,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
         fprintf(stderr, "expected packet size differs from actual packet size");
         return;
     }*/
-    if (!cksum(pkt->data,n)) {
+    if (!cksum(pkt,n)) {
         fprintf(stderr,"packet checksum doesnt fit");
         //packet has been corrupted --> directly return
         //need to send ack?
@@ -155,8 +182,8 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
         //len>8
         //data packet, receiver functionality
         //send ack
-        packet_t ack = create_ack(r->base_seq+1);
-        conn_sendpkt(r->c,ack,htons(8));
+        packet_t* ack = create_ack(r->base_seq+1);
+        conn_sendpkt(r->c,ack,8);
         free(ack);
 
         //add to output buffer = rcv buffer (=packets that are printed to stdout)
@@ -172,25 +199,6 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
     }
 //TODO: buffer out of sequence packets --> how do we know if it's out of sequence/
     //what is expected seqno?
-}
-//creates an ack 
-packet_t* create_ack(uint32_t ackno) {
-    packet_t pkt = xmalloc(8);
-    pkt->cksum = 0x0000;
-    pkt->cksum = cksum(pkt,8);
-    pkt->len = htons(8);
-    pkt->ackno = htonl(ackno);
-    return pkt;
-}
-//data = char array of 500
-//creates a data packet when given pointer to packet which already contains data
-packet_t* create_data(packet_t* pkt, uint16_t len, uint32_t ackno, uint32_t seqno) {
-    pkt->cksum = 0x0000;
-    pkt->cksum = cksum(pkt,len);
-    pkt->len = htons(len);
-    pkt->ackno = htonl(ackno);
-    pkt->seqno = htonl(seqno);
-    return pkt;
 }
 
 /*
@@ -290,7 +298,7 @@ rel_timer ()
     while (current != NULL) {
         // ...
         //for each sender, go through all nodes and check timeout
-        buffer_node_t curr_node = buffer_get_first(current->send_buffer);
+        buffer_node_t* curr_node = buffer_get_first(current->send_buffer);
         while (curr_node != NULL) {
             long retr_timer = current->cc->timeout; //in millisecs
             long now = getTimeMs();
@@ -308,12 +316,7 @@ rel_timer ()
     }
 }
 
-//uses the internal clock to return the current time in milliseconds
-long getTimeMs() {
-    struct timeval now;
-    gettimeofday(&now,NULL);
-    return now.tv_sec * 1000 + now.tv_usec / 1000;
-}
+
 /*
 to run code (test):
 cd reliable/code
