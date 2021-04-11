@@ -64,7 +64,20 @@ packet_t* create_data(packet_t* pkt, uint16_t len, uint32_t ackno, uint32_t seqn
     pkt->seqno = htonl(seqno);
     return pkt;
 }
-
+//returns 1 if a packet is corrupted and 0 otherwise
+int is_corrupted(packet_t* pkt) {
+    if ( ntohs(pkt->len>512 || ntohs(pkt->len)<0) || ntohl(pkt->seqno)<=0 || ntohl(pkt->ackno)<=0) {
+        return 1;
+    }
+    uint16_t oldsum = pkt->cksum;
+    pkt->cksum = 0x0000;
+    uint16_t newsum = ~cksum(pkt,ntohs(pkt->len));
+    pkt->cksum = oldsum;
+    if (oldsum + newsum == 0xFFFF) {
+        return 0;
+    }
+    return 1;
+}
 /* Creates a new reliable protocol session, returns NULL on failure.
 * ss is always NULL */
 rel_t *
@@ -134,26 +147,18 @@ rel_destroy (rel_t *r)
 void
 rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
-    
-    if (ntohs(pkt->len>512 || ntohs(pkt->len)<0)) {
-        fprintf(stderr, "packet length out of bounds");
+    if (is_corrupted(pkt)) {
+        fprintf(stderr, "packet was corrupted");
+        packet_t* ack = create_ack(r->rcv_nxt);
+        conn_sendpkt(r->c,ack,ntohs(8));
+        free(ack);
         return;
     }
-    /*if (nthos(pkt->len) != n) {
+
+    if (ntohs(pkt->len) != n) {
         fprintf(stderr, "expected packet size differs from actual packet size");
         return;
-    }*/
-    if (!cksum(pkt,n)) {
-        fprintf(stderr,"packet checksum doesnt fit");
-        //packet has been corrupted --> directly return
-        //need to send ack?
-        return;
     }
-    //check if packet's seqno is lower than next expected rec seqno
-   // if (ntohl(pkt->seqno < r->rcv_nxt)) {
-        //send ack ?
-  //  }
-    //ntohs for len, ntohl for seqno
     if (ntohs(pkt->len) == 8) {
         //pkt is an ack packet
         //ack: all packets until but excluding that seqno are acked
@@ -176,7 +181,6 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
         //packets (TODO: check this)--> send EOF 
         conn_output(r->c,r->send_buffer,0);
         rel_destroy(r);
-
     }
     else {
         //len>8
@@ -187,18 +191,16 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
         free(ack);
 
         //add to output buffer = rcv buffer (=packets that are printed to stdout)
-        buffer_insert(r->rec_buffer,pkt,0);
+        buffer_insert(r->rec_buffer,pkt,getTimeMs());
         //the received packet is the expected one (lowest seqno in curr windw)
         if (ntohl(pkt->seqno) == (r->base_seq)) {
             //add to outpt buf & write to output
             rel_output(r);
             r->base_seq++;
-            //conn_sendpkt(r->c,r->,8);
         }
         
     }
-//TODO: buffer out of sequence packets --> how do we know if it's out of sequence/
-    //what is expected seqno?
+//TODO: buffer out of sequence packets 
 }
 
 /*
