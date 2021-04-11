@@ -292,8 +292,8 @@ rel_timer ()
 //uses the internal clock to return the current time in milliseconds
 long getTimeMs() {
     struct timeval now; 
-    gettimeofday(&now , NULL) ; 
-    long nowMs = now.tvsec ∗ 1000 + now.tvusec / 1000 ;
+    gettimeofday(&now , NULL); 
+    long nowMs = now.tv_sec ∗ 1000 + now.tv_usec / 1000;
     return nowMs;
 }
 /*
