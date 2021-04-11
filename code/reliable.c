@@ -278,7 +278,7 @@ rel_output (rel_t *r)
         if (out==-1) {
             fprintf(stderr,"buffer couldn't output");
         }
-        buffer_remove(r->rec_buffer,curr_node->packet->seqno);
+        buffer_remove(r->rec_buffer,curr_node->packet.seqno);
         curr_node = buffer_get_first(r->rec_buffer);
         space = conn_bufspace(r->c);
 
@@ -305,7 +305,7 @@ rel_timer ()
             long time_passed = now - curr_node->last_retransmit;
             if (time_passed >= retr_timer) {
                 //packet should be resent
-                conn_sendpkt(current->c, &curr_node->packet,ntohs(curr_node->packet->len));
+                conn_sendpkt(current->c, &curr_node->packet,ntohs(curr_node->packet.len));
                 //update the time of now to that packet
                 buffer_node_t new = {curr_node->packet,getTimeMs(),curr_node->next};
                 *curr_node = new;
