@@ -1,4 +1,4 @@
-include <stdio.h>
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -113,10 +113,10 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
         fprintf(stderr, "packet length out of bounds");
         return;
     }
-    if (nthos(pkt->len) != n) {
+    /*if (nthos(pkt->len) != n) {
         fprintf(stderr, "expected packet size differs from actual packet size");
         return;
-    }
+    }*/
     if (!cksum(pkt->data,n)) {
         fprintf(stderr,"packet checksum doesnt fit");
         //packet has been corrupted --> directly return
