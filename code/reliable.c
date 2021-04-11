@@ -28,20 +28,19 @@ struct reliable_state {
     
     /* Add your own data fields below this */
 
-    config_common *cc; //common config - use for window, timeout
+    struct config_common *cc; //common config - use for window, timeout
     int base_seq; //lowest received packet seqno
     void * temp_buf; //buffer of values to be sent
     uint32_t rcv_nxt; //next seqno expected: rec_buffer->next->packet->seqno
     int send_nxt; //next seqno which is unassigned (to be sent)
     int send_wndw; //send window
     int base_send; //lowest sent packet seqno
-
 };
 rel_t *rel_list;
 
 /* Creates a new reliable protocol session, returns NULL on failure.
 * ss is always NULL */
-l_t *
+rel_t *
 rel_create (conn_t *c, const struct sockaddr_storage *ss,
 const struct config_common *cc)
 {
@@ -157,12 +156,12 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
         //data packet, receiver functionality
         //send ack
         //test maybe need htohs(pkt->len)
-        ack_packet ack = {cksum(pkt->data,pkt->len),htohs(pkt->len),htohl(r->base_seq+1)};
+        struct ack_packet ack = {cksum(pkt->data,pkt->len),htohs(pkt->len),htohl(r->base_seq+1)};
         conn_sendpkt(r->c,ack,8);
         free(ack);
 
         //add to output buffer = rcv buffer (=packets that are printed to stdout)
-        buffer_insert(r->rcv_buffer,pkt,0);
+        buffer_insert(r->rec_buffer,pkt,0);
         //the received packet is the expected one (lowest seqno in curr windw)
         if (ntohl(pkt->seqno) == (r->base_seq)) {
             //add to outpt buf & write to output
@@ -207,8 +206,8 @@ rel_read (rel_t *s)
             //we got some data that we can now send
 
             //loop through all nodes in temp_buf (there are exactly sendPkt #)
-            buffer_node* next = s->temp_buf->head;
-            packet_t sendme = xmalloc(sendPkt+12);
+           // struct buffer_node* next = s->temp_buf->head;
+            packet_t* sendme = xmalloc(sendPkt+12);
             for (int i=0;i<sendPkt;i++) {
                 sendme->data[i] = ((char *)s->temp_buf)[i]; //cast to char pointer from void *
 
@@ -247,13 +246,14 @@ rel_output (rel_t *r)
     size_t space = conn_bufspace(r->c);
     //go through nodes in rec_buffer and output in-order packets
     //always look for base_seq, and if that packet found, increase base_seq
+    buffer_node_t curr_node = buffer_get_first(r->rec_buffer);
     while (curr_node != NULL ) {
-        buffer_node_t curr_node = buffer_get_first(r->rec_buffer);
         int out = conn_output(r->c,r->rec_buffer,space);
         if (out==-1) {
             fprintf(stderr,"buffer couldn't output");
         }
         buffer_remove(r->rec_buffer,curr_node->packet->seqno);
+        curr_node = buffer_get_first(r->rec_buffer);
         space = conn_bufspace(r->c);
 
     }
@@ -275,7 +275,8 @@ rel_timer ()
         buffer_node_t curr_node = buffer_get_first(current->send_buffer);
         while (curr_node != NULL) {
             long retr_timer = current->cc->timeout; //in millisecs
-            long time_passed = getTimeMs() - curr_node->last_retransmit;
+            long now = getTimeMs();
+            long time_passed = now - curr_node->last_retransmit;
             if (time_passed >= retr_timer) {
                 //packet should be resent
                 conn_sendpkt(current->c, &curr_node->packet,nthos(curr_node->packet->len));
@@ -291,10 +292,9 @@ rel_timer ()
 
 //uses the internal clock to return the current time in milliseconds
 long getTimeMs() {
-    struct timeval now; 
-    gettimeofday(&now , NULL); 
-    long nowMs = now.tv_sec ∗ 1000 + now.tv_usec / 1000;
-    return nowMs;
+    struct timeval now;
+    gettimeofday(&now,NULL);
+    return now.tv_sec * 1000 + now.tv_usec / 1000;
 }
 /*
 to run code (test):
