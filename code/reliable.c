@@ -217,16 +217,18 @@ void
 rel_read (rel_t *s)
 {
     fprintf(stderr,"rel_read was called\n");
+    fprintf(stderr, s->base_send);
     //sndwnd = sndnxt-snduna; //not a constant
     //update send window
     s->send_wndw = s->send_nxt - s->base_send;
 
     //check if the next packet is in sending window (= lowest ack + window size)
-    while (s->send_nxt < s->base_send + s->send_wndw) {
+    while (s->send_nxt < s->send_wndw) {
         //get data from conn_input
         //returns number of bytes received
         int sendPkt = conn_input(s->c, s->temp_buf, 500); 
-
+        fprintf(stderr,"sending so many bytes ");
+        fprintf(stderr, sendPkt);
         if (sendPkt == -1) { //either error or EOF
             rel_destroy(s);
         }      
