@@ -148,7 +148,7 @@ void
 rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
     if (is_corrupted(pkt)) {
-        fprintf(stderr, "packet was corrupted");
+        fprintf(stderr, "packet was corrupted\n");
         packet_t* ack = create_ack(r->rcv_nxt);
         conn_sendpkt(r->c,ack,ntohs(8));
         free(ack);
@@ -156,10 +156,11 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
     }
 
     if (ntohs(pkt->len) != n) {
-        fprintf(stderr, "expected packet size differs from actual packet size");
+        fprintf(stderr, "expected packet size differs from actual packet size\n");
         return;
     }
     if (ntohs(pkt->len) == 8) {
+        fprintf(stderr,"received ack\n");
         //pkt is an ack packet
         //ack: all packets until but excluding that seqno are acked
         //update lowest seq number if received packet has a higher ackno
@@ -167,6 +168,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
         //(no selective acks)
         if (pkt->ackno > r->base_seq) {
             //slide window:
+            fprintf(stderr,"ack's number is larger than base\n");
             buffer_remove(r->rec_buffer,pkt->seqno);
         }
         //send other packets
@@ -179,6 +181,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
         //end of file, 0 payload and rec buffer is empty
         //receive zero-len payload and have written contents of prev 
         //packets (TODO: check this)--> send EOF 
+        fprintf(stderr,"received EOF\n");
         conn_output(r->c,r->send_buffer,0);
         rel_destroy(r);
     }
@@ -189,7 +192,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
         packet_t* ack = create_ack(r->base_seq+1);
         conn_sendpkt(r->c,ack,8);
         free(ack);
-
+        fprintf(stderr,"received data packet\n");
         //add to output buffer = rcv buffer (=packets that are printed to stdout)
         buffer_insert(r->rec_buffer,pkt,getTimeMs());
         //the received packet is the expected one (lowest seqno in curr windw)
@@ -211,6 +214,7 @@ reads values from stdin and writes them into the send buffer; then sends them
 void
 rel_read (rel_t *s)
 {
+    fprintf(stderr,"rel_read was called\n");
     //sndwnd = sndnxt-snduna; //not a constant
     //update send window
     s->send_wndw = s->send_nxt - s->base_send;
@@ -265,6 +269,7 @@ go thru receive buffer
 void
 rel_output (rel_t *r)
 {
+    fprintf(stderr,"rel_output was called\n");
 
     int rec_wnd = r->cc->window; //doesnt change
     size_t space = conn_bufspace(r->c);
