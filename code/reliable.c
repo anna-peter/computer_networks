@@ -66,8 +66,8 @@ packet_t* create_data(packet_t* pkt, uint16_t len, uint32_t ackno, uint32_t seqn
 }
 //returns 1 if a packet is corrupted and 0 otherwise
 int is_corrupted(packet_t* pkt) {
-    if ( ntohs(pkt->len)>512 || ntohs(pkt->len)<8 || ntohl(pkt->seqno)<=0 || ntohl(pkt->ackno)<=0 ) {
-        fprintf(stderr, "packet length was out of bounds\n");
+    if ( ntohs(pkt->len)>512 || ntohs(pkt->len)<0 || ntohl(pkt->seqno)<=0 || ntohl(pkt->ackno)<=0 ) {
+        fprintf(stderr, "packet length was out of bounds: length = %04x\n", ntohs(pkt->len));
         return 1;
     }
     uint16_t oldsum = pkt->cksum;
@@ -184,7 +184,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
         //end of file, 0 payload and rec buffer is empty
         //receive zero-len payload and have written contents of prev 
         //packets (TODO: check this)--> send EOF 
-        fprintf(stderr,"received EOF\n");
+        fprintf(stderr,"received EOF, calling rel_destroy\n");
         conn_output(r->c,pkt,0);
         rel_destroy(r);
     }
@@ -278,9 +278,9 @@ go thru receive buffer
 void
 rel_output (rel_t *r)
 {
-    fprintf(stderr,"rel_output was called\n");
-
     size_t space = conn_bufspace(r->c);
+    fprintf(stderr,"rel_output was called with bufferspace = %zu\n", space);
+
     //go through nodes in rec_buffer and output in-order packets
     //always look for rcv_nxt, and if that packet found, increase rcv_nxt
     buffer_node_t* curr_node = buffer_get_first(r->rec_buffer);
@@ -290,6 +290,7 @@ rel_output (rel_t *r)
             fprintf(stderr,"buffer couldn't output");
             return;
         }
+        fprintf(stderr,"removing packet with seqno=%08x\n",curr_node->packet.seqno);
         buffer_remove(r->rec_buffer,curr_node->packet.seqno);
         curr_node = buffer_get_first(r->rec_buffer);
         space = conn_bufspace(r->c);
