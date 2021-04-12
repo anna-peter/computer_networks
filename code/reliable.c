@@ -224,7 +224,7 @@ rel_read (rel_t *s)
     s->send_wndw = s->send_nxt - s->base_send;
 
     //check if the next packet is in sending window (= lowest ack + window size)
-    while (s->send_nxt < s->send_wndw) {
+    while (s->send_nxt < s->base_send + s->cc->window) {
         //get data from conn_input
         //returns number of bytes received
         int sendPkt = conn_input(s->c, s->temp_buf, 500); 
