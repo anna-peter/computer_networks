@@ -29,7 +29,7 @@ struct reliable_state {
     /* Add your own data fields below this */
 
     struct config_common *cc; //common config - use for window, timeout
-    int base_seq; //lowest received packet seqno
+    int base_seq; //lowest received packet seqno --> next ack = this+1
     void * temp_buf; //buffer of values to be sent
     int rcv_nxt; //next seqno expected: rec_buffer->next->packet->seqno
     int send_nxt; //next seqno which is unassigned (to be sent)
@@ -66,7 +66,7 @@ packet_t* create_data(packet_t* pkt, uint16_t len, uint32_t ackno, uint32_t seqn
 }
 //returns 1 if a packet is corrupted and 0 otherwise
 int is_corrupted(packet_t* pkt) {
-    if ( ntohs(pkt->len>512 || ntohs(pkt->len)<0) || ntohl(pkt->seqno)<=0 || ntohl(pkt->ackno)<=0) {
+    if ( ntohs(pkt->len)>512 || ntohs(pkt->len)<8 || ntohl(pkt->seqno)<=0 || ntohl(pkt->ackno)<=0 ) {
         return 1;
     }
     uint16_t oldsum = pkt->cksum;
@@ -175,8 +175,8 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 
     }
     //data packet of len 12
-    else if (ntohs(pkt->len) ==12) {
-        //end of file, 0 payload
+    else if (ntohs(pkt->len) ==12 && !r->rec_buffer) {
+        //end of file, 0 payload and rec buffer is empty
         //receive zero-len payload and have written contents of prev 
         //packets (TODO: check this)--> send EOF 
         conn_output(r->c,r->send_buffer,0);
@@ -240,11 +240,7 @@ rel_read (rel_t *s)
                 sendme->data[i] = ((char *)s->temp_buf)[i]; //cast to char pointer from void *
 
             }
-            sendme->len = htons(12+sendPkt); 
-            sendme->cksum = 0x0000;
-            sendme->cksum = cksum(sendme,sendme->len);
-            sendme->ackno = htonl(s->rcv_nxt);
-            sendme->seqno = htonl(s->send_nxt);
+            sendme = create_data(sendme,htons(12+sendPkt),htonl(s->rcv_nxt),htonl(s->send_nxt));
             int isSent = conn_sendpkt(s->c,sendme,ntohs(sendme->len));
             buffer_insert(s->send_buffer,sendme,getTimeMs());
             free(sendme);
@@ -279,11 +275,15 @@ rel_output (rel_t *r)
         int out = conn_output(r->c,r->rec_buffer,space);
         if (out==-1) {
             fprintf(stderr,"buffer couldn't output");
+            return;
         }
         buffer_remove(r->rec_buffer,curr_node->packet.seqno);
         curr_node = buffer_get_first(r->rec_buffer);
         space = conn_bufspace(r->c);
-
+    }
+    if (!r->rec_buffer && !r->send_buffer) {
+        //rec & send buffers are empty
+        rel_destroy(r);
     }
 
 
