@@ -147,7 +147,8 @@ rel_destroy (rel_t *r)
 void
 rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
-    fprintf(stderr,"rel_recvpkt was called with packet no "++ ntohl(pkt->ackno));
+    fprintf(stderr,"rel_recvpkt was called with packet ackno ");
+    fprintf(ntohl(pkt->ackno));
     if (is_corrupted(pkt)) {
         fprintf(stderr, "packet was corrupted\n");
         packet_t* ack = create_ack(r->rcv_nxt);
