@@ -34,6 +34,7 @@ struct reliable_state {
     int send_nxt; //next seqno which is unassigned (to be sent)
     int send_wndw; //send window
     int base_send; //lowest sent packet seqno
+    int window;
 };
 rel_t *rel_list;
 //uses the internal clock to return the current time in milliseconds
@@ -109,8 +110,9 @@ const struct config_common *cc)
     r->temp_buf = xmalloc(500);
     r->send_nxt = 1;
     r->rcv_nxt = 1;
-    r->send_wndw = r->cc->window; //not sure abt this sndnxt-base_seq
+    r->send_wndw = cc->window; //not sure abt this sndnxt-base_seq
     r->base_send = 1;
+    r->window = cc->window;
 
     // ...
     r->send_buffer = xmalloc(sizeof(buffer_t));
@@ -180,12 +182,12 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 
     }
     //data packet of len 12
-    else if (ntohs(pkt->len) ==12 && !r->rec_buffer) {
+    else if (ntohs(pkt->len) ==12 && !(r->rec_buffer)) {
         //end of file, 0 payload and rec buffer is empty
         //receive zero-len payload and have written contents of prev 
         //packets (TODO: check this)--> send EOF 
         fprintf(stderr,"received EOF\n");
-        conn_output(r->c,r->send_buffer,0);
+        conn_output(r->c,pkt,0);
         rel_destroy(r);
     }
     else {
@@ -199,7 +201,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
         //add to output buffer = rcv buffer (=packets that are printed to stdout)
         buffer_insert(r->rec_buffer,pkt,getTimeMs());
         //the received packet is the expected one (lowest seqno in curr windw)
-        if (ntohl(pkt->seqno) == (r->rcv_nxt)) {
+        if (ntohl(pkt->seqno) <= (r->rcv_nxt)) {
             //add to outpt buf & write to output
             rel_output(r);
             r->rcv_nxt++;
@@ -217,14 +219,14 @@ reads values from stdin and writes them into the send buffer; then sends them
 void
 rel_read (rel_t *s)
 {
-    fprintf(stderr,"rel_read was called with lowest sent seqno=%08x, window size=%i, send_nxt=%08x\n",s->base_send,s->cc->window,s->send_nxt);
-    fprintf(stderr, s->base_send);
+    fprintf(stderr,"rel_read was called with base_send=%08x, window size=%i, send_nxt=%08x\n",s->base_send,s->window,s->send_nxt);
     //sndwnd = sndnxt-snduna; //not a constant
     //update send window
    // s->send_wndw = s->send_nxt - s->base_send;
 
     //check if the next packet is in sending window (= lowest ack + window size)
-    while (s->send_nxt < s->base_send + s->cc->window) {
+    while (s->send_nxt < s->base_send + s->window) {
+        fprintf(stderr,"entered while loop\n");
         //get data from conn_input
         //returns number of bytes received
         int sendPkt = conn_input(s->c, s->temp_buf, 500); 
@@ -280,7 +282,6 @@ rel_output (rel_t *r)
 {
     fprintf(stderr,"rel_output was called\n");
 
-    int rec_wnd = r->cc->window; //doesnt change
     size_t space = conn_bufspace(r->c);
     //go through nodes in rec_buffer and output in-order packets
     //always look for rcv_nxt, and if that packet found, increase rcv_nxt
@@ -297,6 +298,7 @@ rel_output (rel_t *r)
     }
     if (!r->rec_buffer && !r->send_buffer) {
         //rec & send buffers are empty
+        fprintf(stderr,"calling rel_destroy because emptied buffers\n");
         rel_destroy(r);
     }
 
@@ -309,6 +311,7 @@ rel_timer ()
 {
     // Go over all reliable senders, and have them send out
     // all packets whose timer has expired
+    fprintf(stderr,"rel_timer was called\n");
     rel_t *current = rel_list;
     
     while (current != NULL) {
