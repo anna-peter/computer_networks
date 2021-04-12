@@ -66,7 +66,7 @@ packet_t* create_data(packet_t* pkt, uint16_t len, uint32_t ackno, uint32_t seqn
 }
 //returns 1 if a packet is corrupted and 0 otherwise
 int is_corrupted(packet_t* pkt) {
-    if ( ntohs(pkt->len)>512 || ntohs(pkt->len)<0 || ntohl(pkt->seqno)<=0 || ntohl(pkt->ackno)<=0 ) {
+    if ( ntohs(pkt->len)>512 || ntohl(pkt->seqno)<=0 || ntohl(pkt->ackno)<=0 ) {
         fprintf(stderr, "packet length was out of bounds: length = %04x\n", ntohs(pkt->len));
         return 1;
     }
