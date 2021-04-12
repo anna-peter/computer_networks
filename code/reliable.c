@@ -161,6 +161,19 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
         fprintf(stderr, "expected packet size differs from actual packet size\n");
         return;
     }
+    if (ntohl(pkt->ackno) > r->base_send) {
+        //slide window:
+        fprintf(stderr,"ack's number is larger than base\n");
+        r->base_send = pkt->ackno;
+        buffer_remove(r->send_buffer,r->base_send);
+        rel_read(r);
+    }
+    if (ntohl(pkt->seqno) < r->rcv_nxt) {
+        packet_t* ack = create_ack(r->rcv_nxt);
+        conn_sendpkt(r->c,ack,8);
+        free(ack);
+        return;
+    }
     if (ntohs(pkt->len) == 8) {
         fprintf(stderr,"received ack\n");
         //pkt is an ack packet
@@ -168,12 +181,6 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
         //update lowest seq number if received packet has a higher ackno
         //note that an ack means that all packets with lower ackno have also been received!
         //(no selective acks)
-        if (pkt->ackno > r->rcv_nxt) {
-            //slide window:
-            fprintf(stderr,"ack's number is larger than base\n");
-            r->rcv_nxt = pkt->ackno;
-            buffer_remove(r->rec_buffer,pkt->seqno);
-        }
         //send other packets
         rel_read(r);
         //rcvwindow doesnt change
@@ -184,7 +191,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
         //end of file, 0 payload and rec buffer is empty
         //receive zero-len payload and have written contents of prev 
         //packets (TODO: check this)--> send EOF 
-        fprintf(stderr,"received EOF, calling rel_destroy\n");
+        fprintf(stderr,"received EOF bc pkt len 12, calling rel_destroy\n");
         conn_output(r->c,pkt,0);
         rel_destroy(r);
     }
@@ -193,14 +200,15 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
         //data packet, receiver functionality
         //send ack
         fprintf(stderr,"received data packet\n");
-        packet_t* ack = create_ack(r->rcv_nxt);
-        conn_sendpkt(r->c,ack,8);
-        free(ack);
+        
         //add to output buffer = rcv buffer (=packets that are printed to stdout)
         buffer_insert(r->rec_buffer,pkt,getTimeMs());
         //the received packet is the expected one (lowest seqno in curr windw)
-        if (ntohl(pkt->seqno) <= (r->rcv_nxt)) {
+        if (ntohl(pkt->seqno) == (r->rcv_nxt)) {
             //add to outpt buf & write to output
+            packet_t* ack = create_ack(r->rcv_nxt);
+            conn_sendpkt(r->c,ack,8);
+            free(ack);
             rel_output(r);
             r->rcv_nxt++;
         }
