@@ -67,16 +67,14 @@ packet_t* create_data(packet_t* pkt, uint16_t len, uint32_t ackno, uint32_t seqn
 //returns 1 if a packet is corrupted and 0 otherwise
 int is_corrupted(packet_t* pkt) {
     if ( ntohs(pkt->len)>512 || ntohs(pkt->len)<8 || ntohl(pkt->seqno)<=0 || ntohl(pkt->ackno)<=0 ) {
+        fprintf(stderr, "packet length was out of bounds\n");
         return 1;
     }
     uint16_t oldsum = pkt->cksum;
     pkt->cksum = 0x0000;
-    uint16_t newsum = ~cksum(pkt,ntohs(pkt->len));
+    uint16_t newsum = cksum(pkt,ntohs(pkt->len));
     pkt->cksum = oldsum;
-    if (oldsum + newsum == 0xFFFF) {
-        return 0;
-    }
-    return 1;
+    return (oldsum==newsum) ? 0 : 1;
 }
 /* Creates a new reliable protocol session, returns NULL on failure.
 * ss is always NULL */
@@ -311,7 +309,6 @@ rel_timer ()
 {
     // Go over all reliable senders, and have them send out
     // all packets whose timer has expired
-    fprintf(stderr,"rel_timer was called\n");
     rel_t *current = rel_list;
     
     while (current != NULL) {
