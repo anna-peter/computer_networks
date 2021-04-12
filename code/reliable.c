@@ -85,7 +85,7 @@ rel_create (conn_t *c, const struct sockaddr_storage *ss,
 const struct config_common *cc)
 {
     rel_t *r;
-    fprintf(stderr,"did this commit work?");
+    fprintf(stderr,"rel_create was called");
 
     r = xmalloc (sizeof (*r));
     memset (r, 0, sizeof (*r));
@@ -147,6 +147,7 @@ rel_destroy (rel_t *r)
 void
 rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
+    fprintf(stderr,"rel_recvpkt was called with packet no "++ ntohl(pkt->ackno));
     if (is_corrupted(pkt)) {
         fprintf(stderr, "packet was corrupted\n");
         packet_t* ack = create_ack(r->rcv_nxt);
@@ -189,10 +190,10 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
         //len>8
         //data packet, receiver functionality
         //send ack
+        fprintf(stderr,"received data packet\n");
         packet_t* ack = create_ack(r->base_seq+1);
         conn_sendpkt(r->c,ack,8);
         free(ack);
-        fprintf(stderr,"received data packet\n");
         //add to output buffer = rcv buffer (=packets that are printed to stdout)
         buffer_insert(r->rec_buffer,pkt,getTimeMs());
         //the received packet is the expected one (lowest seqno in curr windw)
