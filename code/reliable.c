@@ -72,9 +72,9 @@ int is_corrupted(packet_t* pkt) {
     }
     uint16_t oldsum = pkt->cksum;
     pkt->cksum = 0x0000;
-    uint16_t newsum = cksum(pkt,ntohs(pkt->len));
+    uint16_t newsum = ~cksum(pkt,ntohs(pkt->len));
     pkt->cksum = oldsum;
-    return (oldsum==newsum) ? 0 : 1;
+    return (oldsum+newsum==0xFFFF) ? 0 : 1;
 }
 /* Creates a new reliable protocol session, returns NULL on failure.
 * ss is always NULL */
