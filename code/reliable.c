@@ -29,9 +29,8 @@ struct reliable_state {
     /* Add your own data fields below this */
 
     struct config_common *cc; //common config - use for window, timeout
-    int base_seq; //lowest received packet seqno --> next ack = this+1
     void * temp_buf; //buffer of values to be sent
-    int rcv_nxt; //next seqno expected: rec_buffer->next->packet->seqno
+    int rcv_nxt; //next seqno expected: next ack = this
     int send_nxt; //next seqno which is unassigned (to be sent)
     int send_wndw; //send window
     int base_send; //lowest sent packet seqno
@@ -111,7 +110,6 @@ const struct config_common *cc)
     r->send_nxt = 1;
     r->rcv_nxt = 1;
     r->send_wndw = r->cc->window; //not sure abt this sndnxt-base_seq
-    r->base_seq = 1;
     r->base_send = 1;
 
     // ...
@@ -170,9 +168,10 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
         //update lowest seq number if received packet has a higher ackno
         //note that an ack means that all packets with lower ackno have also been received!
         //(no selective acks)
-        if (pkt->ackno > r->base_seq) {
+        if (pkt->ackno > r->rcv_nxt) {
             //slide window:
             fprintf(stderr,"ack's number is larger than base\n");
+            r->rcv_nxt = pkt->ackno;
             buffer_remove(r->rec_buffer,pkt->seqno);
         }
         //send other packets
@@ -194,16 +193,16 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
         //data packet, receiver functionality
         //send ack
         fprintf(stderr,"received data packet\n");
-        packet_t* ack = create_ack(r->base_seq+1);
+        packet_t* ack = create_ack(r->rcv_nxt);
         conn_sendpkt(r->c,ack,8);
         free(ack);
         //add to output buffer = rcv buffer (=packets that are printed to stdout)
         buffer_insert(r->rec_buffer,pkt,getTimeMs());
         //the received packet is the expected one (lowest seqno in curr windw)
-        if (ntohl(pkt->seqno) == (r->base_seq)) {
+        if (ntohl(pkt->seqno) == (r->rcv_nxt)) {
             //add to outpt buf & write to output
             rel_output(r);
-            r->base_seq++;
+            r->rcv_nxt++;
         }
         
     }
@@ -218,21 +217,25 @@ reads values from stdin and writes them into the send buffer; then sends them
 void
 rel_read (rel_t *s)
 {
-    fprintf(stderr,"rel_read was called\n");
+    fprintf(stderr,"rel_read was called with lowest sent seqno=%08x, window size=%i, send_nxt=%08x\n",s->base_send,s->cc->window,s->send_nxt);
     fprintf(stderr, s->base_send);
     //sndwnd = sndnxt-snduna; //not a constant
     //update send window
-    s->send_wndw = s->send_nxt - s->base_send;
+   // s->send_wndw = s->send_nxt - s->base_send;
 
     //check if the next packet is in sending window (= lowest ack + window size)
     while (s->send_nxt < s->base_send + s->cc->window) {
         //get data from conn_input
         //returns number of bytes received
         int sendPkt = conn_input(s->c, s->temp_buf, 500); 
-        fprintf(stderr,"sending so many bytes ");
-        fprintf(stderr, sendPkt);
+        fprintf(stderr,"sending so many bytes: %i\n",sendPkt);
         if (sendPkt == -1) { //either error or EOF
-            rel_destroy(s);
+            //send eof
+            packet_t* eof = xmalloc(12);
+            eof = create_data(eof, 12, s->rcv_nxt,s->send_nxt);
+            conn_output(s->c,eof,0);
+            buffer_insert(s->send_buffer,eof,getTimeMs());
+            free(eof);
         }      
 
         else if (sendPkt == 0) {
@@ -262,7 +265,7 @@ rel_read (rel_t *s)
 
         }
         s->send_nxt++;
-        s->send_wndw = s->send_nxt - s->base_send;
+        //s->send_wndw = s->send_nxt - s->base_send;
     }
     
     /* Your logic implementation here */
@@ -280,7 +283,7 @@ rel_output (rel_t *r)
     int rec_wnd = r->cc->window; //doesnt change
     size_t space = conn_bufspace(r->c);
     //go through nodes in rec_buffer and output in-order packets
-    //always look for base_seq, and if that packet found, increase base_seq
+    //always look for rcv_nxt, and if that packet found, increase rcv_nxt
     buffer_node_t* curr_node = buffer_get_first(r->rec_buffer);
     while (curr_node != NULL ) {
         int out = conn_output(r->c,r->rec_buffer,space);
