@@ -112,6 +112,7 @@ const struct config_common *cc)
     r->rcv_nxt = 1;
     r->send_wndw = r->cc->window; //not sure abt this sndnxt-base_seq
     r->base_seq = 1;
+    r->base_send = 1;
 
     // ...
     r->send_buffer = xmalloc(sizeof(buffer_t));
