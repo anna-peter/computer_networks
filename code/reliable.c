@@ -67,10 +67,10 @@ packet_t* create_data(packet_t* pkt, uint16_t len_, uint32_t ackno_, uint32_t se
 }
 //returns 1 if a packet is corrupted and 0 otherwise
 int is_corrupted(packet_t* pkt) {
-    /*if ( ntohs(pkt->len)>512 || ntohl(pkt->seqno)<=0 || ntohl(pkt->ackno)<=0 ) {
+    if ( ntohs(pkt->len)>512 || ntohl(pkt->seqno)<=0 || ntohl(pkt->ackno)<=0 ) {
         fprintf(stderr, "packet length was out of bounds: length = %04x\n", ntohs(pkt->len));
         return 1;
-    }*/
+    }
     uint16_t oldsum = pkt->cksum;
     pkt->cksum = 0x0000;
     uint16_t newsum = cksum(pkt,ntohs(pkt->len));
@@ -157,7 +157,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
         /*packet_t* ack = create_ack(r->rcv_nxt);
         conn_sendpkt(r->c,ack,ntohs(8));
         free(ack);*/
-        //return;
+        return;
     }
 
     if (ntohl(pkt->ackno) > r->base_send) {
@@ -298,7 +298,7 @@ rel_output (rel_t *r)
     //always look for rcv_nxt, and if that packet found, increase rcv_nxt
     buffer_node_t* curr_node = buffer_get_first(r->rec_buffer);
     //while we have something in rec buffer & packet is in receiving window
-    while (curr_node != NULL && curr_node->packet.seqno < r->rcv_nxt+r->window) {
+    while (curr_node != NULL && ntohs(curr_node->packet.seqno) < r->rcv_nxt+r->window) {
         int out = conn_output(r->c,r->rec_buffer,space);
         if (out==-1) {
             fprintf(stderr,"buffer couldn't output");
@@ -310,7 +310,7 @@ rel_output (rel_t *r)
             r->rcv_nxt = curr_node->packet.seqno;
         }
         //outputted the packet, so we can remove it from buf
-        buffer_remove(r->rec_buffer,curr_node->packet.seqno);
+        buffer_remove(r->rec_buffer,ntohl(curr_node->packet.seqno) +1);
         curr_node = buffer_get_first(r->rec_buffer);
         space = conn_bufspace(r->c);
     }
