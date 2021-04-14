@@ -30,11 +30,12 @@ struct reliable_state {
 
     struct config_common *cc; //common config - use for window, timeout
     void * temp_buf; //buffer of values to be sent
-    int rcv_nxt; //next seqno expected: next ack = this
+    uint32_t rcv_nxt; //next seqno expected: next ack = this
     int send_nxt; //next seqno which is unassigned (to be sent)
-    int send_wndw; //send window
     int base_send; //lowest sent packet seqno
+    int send_wndw; //send window
     int window;
+    int timeout;
 };
 rel_t *rel_list;
 //uses the internal clock to return the current time in milliseconds
@@ -56,25 +57,26 @@ packet_t* create_ack(uint32_t ackno) {
 
 //data = char array of 500
 //creates a data packet when given pointer to packet which already contains data
-packet_t* create_data(packet_t* pkt, uint16_t len, uint32_t ackno, uint32_t seqno) {
+packet_t* create_data(packet_t* pkt, uint16_t len_, uint32_t ackno_, uint32_t seqno_) {
     pkt->cksum = 0x0000;
-    pkt->cksum = cksum(pkt,len);
-    pkt->len = htons(len);
-    pkt->ackno = htonl(ackno);
-    pkt->seqno = htonl(seqno);
+    pkt->cksum = cksum(pkt,len_);
+    pkt->len = htons(len_);
+    pkt->ackno = htonl(ackno_);
+    pkt->seqno = htonl(seqno_);
     return pkt;
 }
 //returns 1 if a packet is corrupted and 0 otherwise
 int is_corrupted(packet_t* pkt) {
-    if ( ntohs(pkt->len)>512 || ntohl(pkt->seqno)<=0 || ntohl(pkt->ackno)<=0 ) {
+    /*if ( ntohs(pkt->len)>512 || ntohl(pkt->seqno)<=0 || ntohl(pkt->ackno)<=0 ) {
         fprintf(stderr, "packet length was out of bounds: length = %04x\n", ntohs(pkt->len));
         return 1;
-    }
+    }*/
     uint16_t oldsum = pkt->cksum;
     pkt->cksum = 0x0000;
-    uint16_t newsum = ~cksum(pkt,ntohs(pkt->len));
+    uint16_t newsum = cksum(pkt,ntohs(pkt->len));
     pkt->cksum = oldsum;
-    return (oldsum+newsum==0xFFFF) ? 0 : 1;
+    fprintf(stderr,"olsum=%04x and newsum=%04x\n",oldsum,newsum);
+    return (oldsum==newsum) ? 0 : 1;
 }
 /* Creates a new reliable protocol session, returns NULL on failure.
 * ss is always NULL */
@@ -83,7 +85,7 @@ rel_create (conn_t *c, const struct sockaddr_storage *ss,
 const struct config_common *cc)
 {
     rel_t *r;
-    fprintf(stderr,"rel_create was called");
+    fprintf(stderr,"rel_create was called\n");
 
     r = xmalloc (sizeof (*r));
     memset (r, 0, sizeof (*r));
@@ -107,10 +109,11 @@ const struct config_common *cc)
     r->cc = cc;
     r->temp_buf = xmalloc(500);
     r->send_nxt = 1;
-    r->rcv_nxt = 1;
+    r->rcv_nxt = 2;
     r->send_wndw = cc->window; //not sure abt this sndnxt-base_seq
     r->base_send = 1;
     r->window = cc->window;
+    r->timeout = cc->timeout;
 
     // ...
     r->send_buffer = xmalloc(sizeof(buffer_t));
@@ -149,22 +152,19 @@ void
 rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
     fprintf(stderr,"rel_recvpkt was called with packet ackno  %08x and checksum %04x\n", ntohl(pkt->ackno), pkt->cksum);
-    if (is_corrupted(pkt)) {
+    if (is_corrupted(pkt) || ntohs(pkt->len) != n) {
         fprintf(stderr, "packet was corrupted\n");
-        packet_t* ack = create_ack(r->rcv_nxt);
+        /*packet_t* ack = create_ack(r->rcv_nxt);
         conn_sendpkt(r->c,ack,ntohs(8));
-        free(ack);
-        return;
+        free(ack);*/
+        //return;
     }
 
-    if (ntohs(pkt->len) != n) {
-        fprintf(stderr, "expected packet size differs from actual packet size\n");
-        return;
-    }
     if (ntohl(pkt->ackno) > r->base_send) {
         //slide window:
         fprintf(stderr,"ack's number is larger than base\n");
         r->base_send = pkt->ackno;
+        r->rcv_nxt = r->base_send + 1;
         buffer_remove(r->send_buffer,r->base_send);
         rel_read(r);
     }
@@ -195,18 +195,20 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
         conn_output(r->c,pkt,0);
         rel_destroy(r);
     }
-    else {
+    else if (ntohs(pkt->len)>12){
         //len>8
         //data packet, receiver functionality
         //send ack
-        fprintf(stderr,"received data packet\n");
+        fprintf(stderr,"received data packet with ackno=%08x and rcv_nxt=%i and cksum=%04x\n",ntohl(pkt->ackno),r->rcv_nxt,ntohs(pkt->cksum));
         
         //add to output buffer = rcv buffer (=packets that are printed to stdout)
-        buffer_insert(r->rec_buffer,pkt,getTimeMs());
+        buffer_insert(r->rec_buffer,pkt,0); //problem!!
         //the received packet is the expected one (lowest seqno in curr windw)
-        if (ntohl(pkt->seqno) == (r->rcv_nxt)) {
+        fprintf(stderr,"is it? %d \n", (pkt->ackno)+1 == (r->rcv_nxt));
+        if ((pkt->ackno)+1 == (r->rcv_nxt)) {
             //add to outpt buf & write to output
-            packet_t* ack = create_ack(r->rcv_nxt);
+            fprintf(stderr,"calling rel_output because ackno matches rcv_nxt=%i\n",r->rcv_nxt);
+            packet_t* ack = create_ack(htonl(r->rcv_nxt));
             conn_sendpkt(r->c,ack,8);
             free(ack);
             rel_output(r);
@@ -231,7 +233,7 @@ rel_read (rel_t *s)
    // s->send_wndw = s->send_nxt - s->base_send;
 
     //check if the next packet is in sending window (= lowest ack + window size)
-    while (s->send_nxt < s->base_send + s->window) {
+    while (s->send_nxt <= s->base_send + s->window) {
         fprintf(stderr,"entered while loop\n");
         //get data from conn_input
         //returns number of bytes received
@@ -244,24 +246,27 @@ rel_read (rel_t *s)
             conn_output(s->c,eof,0);
             buffer_insert(s->send_buffer,eof,getTimeMs());
             free(eof);
+            return;
         }      
 
         else if (sendPkt == 0) {
             //no data is available
             //library will call again once data is available
-            return;
+            fprintf(stderr, "nothing was sent because 0 bytes retrieved\n");
+            return; //check these returns 
         }
         else {
             //we got some data that we can now send
 
             //loop through all nodes in temp_buf (there are exactly sendPkt #)
            // struct buffer_node* next = s->temp_buf->head;
-            packet_t* sendme = xmalloc(sendPkt+12);
+            packet_t* sendme = xmalloc(sizeof(struct packet)); //sendPkt+12
             for (int i=0;i<sendPkt;i++) {
                 sendme->data[i] = ((char *)s->temp_buf)[i]; //cast to char pointer from void *
 
             }
-            sendme = create_data(sendme,htons(12+sendPkt),htonl(s->rcv_nxt),htonl(s->send_nxt));
+            sendme = create_data(sendme,htons(12),htonl(s->rcv_nxt),htonl(s->send_nxt));
+            fprintf(stderr,"sending data from rel_read ... seqno=%08x",sendme->seqno);
             int isSent = conn_sendpkt(s->c,sendme,ntohs(sendme->len));
             buffer_insert(s->send_buffer,sendme,getTimeMs());
             free(sendme);
@@ -271,8 +276,8 @@ rel_read (rel_t *s)
             //sendpkt, but then why do we need send_buffer? what does it do?
             //only trieed to send it w sendpkt, need to put into buffer until acked
 
+            s->send_nxt++;
         }
-        s->send_nxt++;
         //s->send_wndw = s->send_nxt - s->base_send;
     }
     
@@ -292,13 +297,19 @@ rel_output (rel_t *r)
     //go through nodes in rec_buffer and output in-order packets
     //always look for rcv_nxt, and if that packet found, increase rcv_nxt
     buffer_node_t* curr_node = buffer_get_first(r->rec_buffer);
-    while (curr_node != NULL ) {
+    //while we have something in rec buffer & packet is in receiving window
+    while (curr_node != NULL && curr_node->packet.seqno < r->rcv_nxt+r->window) {
         int out = conn_output(r->c,r->rec_buffer,space);
         if (out==-1) {
             fprintf(stderr,"buffer couldn't output");
             return;
         }
         fprintf(stderr,"removing packet with seqno=%08x\n",curr_node->packet.seqno);
+        //we can slide receiving window
+        if (curr_node->packet.seqno < r->rcv_nxt) {
+            r->rcv_nxt = curr_node->packet.seqno;
+        }
+        //outputted the packet, so we can remove it from buf
         buffer_remove(r->rec_buffer,curr_node->packet.seqno);
         curr_node = buffer_get_first(r->rec_buffer);
         space = conn_bufspace(r->c);
@@ -325,7 +336,7 @@ rel_timer ()
         //for each sender, go through all nodes and check timeout
         buffer_node_t* curr_node = buffer_get_first(current->send_buffer);
         while (curr_node != NULL) {
-            long retr_timer = current->cc->timeout; //in millisecs
+            long retr_timer = current->timeout; //in millisecs
             long now = getTimeMs();
             long time_passed = now - curr_node->last_retransmit;
             if (time_passed >= retr_timer) {
