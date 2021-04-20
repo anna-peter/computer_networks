@@ -79,14 +79,14 @@ packet_t* create_data(packet_t* pkt, uint16_t len_, uint32_t ackno_, uint32_t se
 
 //returns 1 if a packet is corrupted and 0 otherwise
 int is_corrupted(packet_t* pkt) {
-    if ( ntohs(pkt->len) > 512 || ntohl(pkt->seqno) <= 0 || ntohl(pkt->ackno) <= 0 ) {
+    if (ntohl(pkt->ackno) <= 0 || ntohl(pkt->seqno) <= 0 || ntohs(pkt->len)>512) {
         return 1;
     }
     uint16_t oldsum = pkt->cksum;
     pkt->cksum = 0x0000;
     uint16_t newsum = ~cksum(pkt,ntohs(pkt->len));
     pkt->cksum = oldsum;
-    //fprintf(stderr,"olsum=%04x and newsum=%04x\n",ntohs(oldsum),ntohs(newsum));
+    fprintf(stderr,"olsum=%04x and newsum=%04x\n",(oldsum),(newsum));
     return oldsum+newsum == 0xFFFF ? 0 : 1;
 }
 /* Creates a new reliable protocol session, returns NULL on failure.
@@ -164,9 +164,13 @@ rel_destroy (rel_t *r)
 void
 rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
-    fprintf(stderr,"rel_recvpkt was called with packet ackno  %08x and checksum %04x\n", ntohl(pkt->ackno), ntohs(pkt->cksum));
+    fprintf(stderr,"rel_recvpkt was called with packet ackno  %08x and checksum %04x\n", ntohl(pkt->ackno), (pkt->cksum));
     if (is_corrupted(pkt) /*|| ntohs(pkt->len) != n*/) {
         fprintf(stderr, "packet was corrupted\n");
+        //still send an ack 
+        packet_t* ack = create_ack(r->rcv_nxt);
+        conn_sendpkt(r->c, ack, 8);
+        free(ack);
         return;
     }
 
@@ -177,24 +181,24 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
         buffer_remove(r->send_buffer,r->base_send);
         rel_read(r);
     }
-
-    //if len = 8, packet is an ack-only packet
-    if (ntohs(pkt->len) == 8) {
-        fprintf(stderr,"received ack\n");
-        //send other packets
-        rel_read(r);
+    if (ntohl(pkt->seqno) < r->rcv_nxt) {
+        //received a not yet acked packet, need to send ack
+        packet_t* ack = create_ack(r->rcv_nxt);
+        conn_sendpkt(r->c,ack,8);
+        free(ack);
+        return;
     }
-    //data packet of len 12
     if (ntohs(pkt->len) == 12) {
-        //end of file, 0 payload and rec buffer is empty
-        //receive zero-len payload and have written contents of prev 
-        //packets (TODO: check this)--> send EOF 
         fprintf(stderr,"received EOF bc pkt len 12\n");
         r->rcv_eof = 1;
     }
     if ((r->rcv_eof==1) && (r->input_eof==1) && isEmpty(r->send_buffer) && isEmpty(r->rec_buffer)) {
-        fprintf(stderr,"calling rel destroy \n");
+        fprintf(stderr,"calling rel destroy but sending ack beforehand\n");
+        packet_t* ack = create_ack(r->rcv_nxt);
+        conn_sendpkt(r->c,ack,8);
+        free(ack);
         rel_destroy(r);
+        return;
     }
     if (ntohl(pkt->seqno) < r->rcv_nxt + r->window) {
         if (buffer_contains(r->rec_buffer, ntohl(pkt->seqno))) {
