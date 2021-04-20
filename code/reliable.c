@@ -30,12 +30,14 @@ struct reliable_state {
 
     struct config_common *cc; //common config - use for window, timeout
     void * temp_buf; //buffer of values to be sent
-    uint32_t rcv_nxt; //next seqno expected: next ack = this
+    uint32_t rcv_nxt; //next seqno expected: next ack = this (largest received seqno+2/ largest rec ack+1)
     int send_nxt; //next seqno which is unassigned (to be sent)
     int base_send; //lowest sent packet seqno
     int send_wndw; //send window
     int window;
     int timeout;
+    int input_eof; //1 if has gotten eof from input (read)
+    int rcv_eof; //1 if has received eof from other sender
 };
 rel_t *rel_list;
 //uses the internal clock to return the current time in milliseconds
@@ -48,35 +50,44 @@ long getTimeMs() {
 //creates an ack 
 packet_t* create_ack(uint32_t ackno) {
     packet_t* pkt = xmalloc(8);
-    pkt->cksum = 0x0000;
+    pkt->cksum = htons(0x0000);
     pkt->cksum = cksum(pkt,8);
+
     pkt->len = htons(8);
     pkt->ackno = htonl(ackno);
     return pkt;
+}
+// returns 1 if the given buffer is empty (pointer to first node = null)
+int isEmpty(buffer_t* buf) {
+    if (buffer_get_first(buf) == NULL) {
+        return 1;
+    } else {
+        return 0;
+    }
 }
 
 //data = char array of 500
 //creates a data packet when given pointer to packet which already contains data
 packet_t* create_data(packet_t* pkt, uint16_t len_, uint32_t ackno_, uint32_t seqno_) {
-    pkt->cksum = 0x0000;
-    pkt->cksum = cksum(pkt,len_);
+    pkt->cksum = htons(0x0000);
+    pkt->cksum = cksum(pkt,(len_));
     pkt->len = htons(len_);
     pkt->ackno = htonl(ackno_);
     pkt->seqno = htonl(seqno_);
     return pkt;
 }
+
 //returns 1 if a packet is corrupted and 0 otherwise
 int is_corrupted(packet_t* pkt) {
-    if ( (pkt->len)>512 || (pkt->seqno)<=0 || (pkt->ackno)<=0 ) {
-        fprintf(stderr, "packet length was out of bounds: length = %04x\n", (pkt->len));
+    if ( ntohs(pkt->len) > 512 || ntohl(pkt->seqno) <= 0 || ntohl(pkt->ackno) <= 0 ) {
         return 1;
     }
     uint16_t oldsum = pkt->cksum;
     pkt->cksum = 0x0000;
-    uint16_t newsum = cksum(pkt,ntohs(pkt->len));
+    uint16_t newsum = ~cksum(pkt,ntohs(pkt->len));
     pkt->cksum = oldsum;
-    fprintf(stderr,"olsum=%04x and newsum=%04x\n",oldsum,newsum);
-    return (oldsum==newsum) ? 0 : 1;
+    //fprintf(stderr,"olsum=%04x and newsum=%04x\n",ntohs(oldsum),ntohs(newsum));
+    return oldsum+newsum == 0xFFFF ? 0 : 1;
 }
 /* Creates a new reliable protocol session, returns NULL on failure.
 * ss is always NULL */
@@ -109,11 +120,13 @@ const struct config_common *cc)
     r->cc = cc;
     r->temp_buf = xmalloc(500);
     r->send_nxt = 1;
-    r->rcv_nxt = 2;
+    r->rcv_nxt = 1;
     r->send_wndw = cc->window; //not sure abt this sndnxt-base_seq
     r->base_send = 1;
     r->window = cc->window;
     r->timeout = cc->timeout;
+    r->input_eof = 0;
+    r->rcv_eof = 0;
 
     // ...
     r->send_buffer = xmalloc(sizeof(buffer_t));
@@ -151,72 +164,56 @@ rel_destroy (rel_t *r)
 void
 rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
-    fprintf(stderr,"rel_recvpkt was called with packet ackno  %08x and checksum %04x\n", ntohl(pkt->ackno), pkt->cksum);
-    if (is_corrupted(&pkt) || ntohs(pkt->len) != n) {
+    fprintf(stderr,"rel_recvpkt was called with packet ackno  %08x and checksum %04x\n", ntohl(pkt->ackno), ntohs(pkt->cksum));
+    if (is_corrupted(pkt) /*|| ntohs(pkt->len) != n*/) {
         fprintf(stderr, "packet was corrupted\n");
-        /*packet_t* ack = create_ack(r->rcv_nxt);
-        conn_sendpkt(r->c,ack,ntohs(8));
-        free(ack);*/
         return;
     }
 
     if (ntohl(pkt->ackno) > r->base_send) {
         //slide window:
         fprintf(stderr,"ack's number is larger than base\n");
-        r->base_send = pkt->ackno;
-        r->rcv_nxt = r->base_send + 1;
+        r->base_send = ntohl(pkt->ackno);
         buffer_remove(r->send_buffer,r->base_send);
         rel_read(r);
     }
-    if (ntohl(pkt->seqno) < r->rcv_nxt) {
-        packet_t* ack = create_ack(r->rcv_nxt);
-        conn_sendpkt(r->c,ack,8);
-        free(ack);
-        return;
-    }
+
+    //if len = 8, packet is an ack-only packet
     if (ntohs(pkt->len) == 8) {
         fprintf(stderr,"received ack\n");
-        //pkt is an ack packet
-        //ack: all packets until but excluding that seqno are acked
-        //update lowest seq number if received packet has a higher ackno
-        //note that an ack means that all packets with lower ackno have also been received!
-        //(no selective acks)
         //send other packets
         rel_read(r);
-        //rcvwindow doesnt change
-
     }
     //data packet of len 12
-    else if (ntohs(pkt->len) ==12 && !(r->rec_buffer)) {
+    if (ntohs(pkt->len) == 12) {
         //end of file, 0 payload and rec buffer is empty
         //receive zero-len payload and have written contents of prev 
         //packets (TODO: check this)--> send EOF 
-        fprintf(stderr,"received EOF bc pkt len 12, calling rel_destroy\n");
-        conn_output(r->c,pkt,0);
+        fprintf(stderr,"received EOF bc pkt len 12\n");
+        r->rcv_eof = 1;
+    }
+    if ((r->rcv_eof==1) && (r->input_eof==1) && isEmpty(r->send_buffer) && isEmpty(r->rec_buffer)) {
+        fprintf(stderr,"calling rel destroy \n");
         rel_destroy(r);
     }
-    else if (ntohs(pkt->len)>12){
-        //len>8
-        //data packet, receiver functionality
-        //send ack
-        fprintf(stderr,"received data packet with ackno=%08x and rcv_nxt=%i and cksum=%04x\n",ntohl(pkt->ackno),r->rcv_nxt,ntohs(pkt->cksum));
-        
-        //add to output buffer = rcv buffer (=packets that are printed to stdout)
-        buffer_insert(r->rec_buffer,pkt,0); //problem!!
-        //the received packet is the expected one (lowest seqno in curr windw)
-        fprintf(stderr,"is it? %d \n", (pkt->ackno)+1 == (r->rcv_nxt));
-        if ((pkt->ackno)+1 == (r->rcv_nxt)) {
-            //add to outpt buf & write to output
-            fprintf(stderr,"calling rel_output because ackno matches rcv_nxt=%i\n",r->rcv_nxt);
-            packet_t* ack = create_ack(htonl(r->rcv_nxt));
-            conn_sendpkt(r->c,ack,8);
+    if (ntohl(pkt->seqno) < r->rcv_nxt + r->window) {
+        if (buffer_contains(r->rec_buffer, ntohl(pkt->seqno))) {
+            packet_t* ack = create_ack(r->rcv_nxt);
+            conn_sendpkt(r->c, ack, 8);
             free(ack);
-            rel_output(r);
-            r->rcv_nxt++;
+            return;
         }
-        
+
+        if (ntohs(pkt->len) >= 12) {
+            buffer_insert(r->rec_buffer, pkt, 0);
+            if (ntohl(pkt->seqno) == r->rcv_nxt) { //packet is the next expected one-->try to output
+                rel_output(r);
+                packet_t* ack = create_ack(r->rcv_nxt);
+                conn_sendpkt(r->c, ack, 8);
+                free(ack);
+            }
+        }
     }
-//TODO: buffer out of sequence packets 
 }
 
 /*
@@ -233,17 +230,21 @@ rel_read (rel_t *s)
    // s->send_wndw = s->send_nxt - s->base_send;
 
     //check if the next packet is in sending window (= lowest ack + window size)
-    while (s->send_nxt <= s->base_send + s->window) {
+    while (s->send_nxt < s->base_send + s->window) {
         fprintf(stderr,"entered while loop\n");
         //get data from conn_input
         //returns number of bytes received
         int sendPkt = conn_input(s->c, s->temp_buf, 500); 
         fprintf(stderr,"sending so many bytes: %i\n",sendPkt);
         if (sendPkt == -1) { //either error or EOF
+            if (s->input_eof) {
+                return;
+            }
             //send eof
             packet_t* eof = xmalloc(12);
             eof = create_data(eof, 12, s->rcv_nxt,s->send_nxt);
-            conn_output(s->c,eof,0);
+            conn_sendpkt(s->c, eof, ntohs(eof->len));
+            s->input_eof = 1;
             buffer_insert(s->send_buffer,eof,getTimeMs());
             free(eof);
             return;
@@ -267,7 +268,7 @@ rel_read (rel_t *s)
             }
             sendme = create_data(sendme,htons(12),htonl(s->rcv_nxt),htonl(s->send_nxt));
             fprintf(stderr,"sending data from rel_read ... seqno=%08x",sendme->seqno);
-            int isSent = conn_sendpkt(s->c,sendme,ntohs(sendme->len));
+            conn_sendpkt(s->c,sendme,ntohs(sendme->len));
             buffer_insert(s->send_buffer,sendme,getTimeMs());
             free(sendme);
 
@@ -298,30 +299,28 @@ rel_output (rel_t *r)
     //always look for rcv_nxt, and if that packet found, increase rcv_nxt
     buffer_node_t* curr_node = buffer_get_first(r->rec_buffer);
     //while we have something in rec buffer & packet is in receiving window
-    while (curr_node != NULL && ntohs(curr_node->packet.seqno) < r->rcv_nxt+r->window) {
+    while ((curr_node != NULL) && (ntohl(curr_node->packet.seqno) < r->rcv_nxt + r->window)) {
         int out = conn_output(r->c,r->rec_buffer,space);
         if (out==-1) {
             fprintf(stderr,"buffer couldn't output");
             return;
         }
-        fprintf(stderr,"removing packet with seqno=%08x\n",curr_node->packet.seqno);
+        fprintf(stderr,"removing packet with seqno=%08x\n",ntohl(curr_node->packet.seqno));
         //we can slide receiving window
-        if (curr_node->packet.seqno < r->rcv_nxt) {
-            r->rcv_nxt = curr_node->packet.seqno;
+        if (ntohl(curr_node->packet.seqno) < r->rcv_nxt) {
+            r->rcv_nxt = ntohl(curr_node->packet.seqno);
         }
         //outputted the packet, so we can remove it from buf
         buffer_remove(r->rec_buffer,ntohl(curr_node->packet.seqno) +1);
         curr_node = buffer_get_first(r->rec_buffer);
         space = conn_bufspace(r->c);
     }
-    if (!r->rec_buffer && !r->send_buffer) {
+    
+    if ((r->rcv_eof==1) && (r->input_eof==1) && isEmpty(r->send_buffer) && isEmpty(r->rec_buffer)) {
         //rec & send buffers are empty
         fprintf(stderr,"calling rel_destroy because emptied buffers\n");
         rel_destroy(r);
     }
-
-
-    /* Your logic implementation here */
 }
 
 void
