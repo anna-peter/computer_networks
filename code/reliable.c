@@ -292,35 +292,30 @@ go thru receive buffer
 void
 rel_output (rel_t *r)
 {
-    size_t space = conn_bufspace(r->c);
-    fprintf(stderr,"rel_output was called with bufferspace = %zu\n", space);
-
-    //go through nodes in rec_buffer and output in-order packets
-    //always look for rcv_nxt, and if that packet found, increase rcv_nxt
-    buffer_node_t* curr_node = buffer_get_first(r->rec_buffer);
-    //while we have something in rec buffer & packet is in receiving window
-    while ((curr_node != NULL) && (ntohl(curr_node->packet.seqno) < r->rcv_nxt + r->window)) {
-        int out = conn_output(r->c,r->rec_buffer,space);
-        if (out==-1) {
-            fprintf(stderr,"buffer couldn't output");
-            return;
+    buffer_node_t* curr_node = r->rec_buffer->head;
+    uint32_t currSeq = ntohl(curr_node->packet.seqno);
+    uint32_t prevSeq = currSeq -1;
+    //loop thru consec. packets, break if cleareed buffer
+    while (1) {
+        if (prevSeq +1==currSeq) { //theyre consecutive
+            conn_output(r->c,curr_node->packet.data,ntohs(curr_node->packet.len)-12);
         }
-        fprintf(stderr,"removing packet with seqno=%08x\n",ntohl(curr_node->packet.seqno));
-        //we can slide receiving window
-        if (ntohl(curr_node->packet.seqno) < r->rcv_nxt) {
-            r->rcv_nxt = ntohl(curr_node->packet.seqno);
+        else {
+            r->rcv_nxt=prevSeq+1;
         }
-        //outputted the packet, so we can remove it from buf
-        buffer_remove(r->rec_buffer,ntohl(curr_node->packet.seqno) +1);
-        curr_node = buffer_get_first(r->rec_buffer);
-        space = conn_bufspace(r->c);
+        //we have next node
+        if (curr_node->next != NULL ) {
+            prevSeq = currSeq;
+            curr_node = curr_node->next;
+            currSeq = curr_node->packet.seqno;
+        }
+        else { //next node =null
+            r->rcv_nxt=currSeq+1;
+            break;
+        }
     }
-    
-    if ((r->rcv_eof==1) && (r->input_eof==1) && isEmpty(r->send_buffer) && isEmpty(r->rec_buffer)) {
-        //rec & send buffers are empty
-        fprintf(stderr,"calling rel_destroy because emptied buffers\n");
-        rel_destroy(r);
-    }
+    //remove all outputtet packets from buffer
+    buffer_remove(r->rec_buffer,r->rcv_nxt);
 }
 
 void
