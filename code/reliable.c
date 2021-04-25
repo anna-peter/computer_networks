@@ -37,7 +37,7 @@ struct reliable_state {
     buffer_t* rec_buffer;
 
 
-    void * temp_buf; //buffer of values to be sent (gotten from conn_input)
+    void* temp_buf; //buffer of values to be sent (gotten from conn_input)
     int window;
     int timeout;
 
@@ -90,7 +90,7 @@ packet_t* create_data(packet_t* pkt, uint16_t len_, uint32_t ackno_, uint32_t se
 
 //returns 1 if a packet is corrupted and 0 otherwise
 int is_corrupted(packet_t* pkt) {
-    if ( (ntohl(pkt->ackno) <= 0) || (ntohl(pkt->seqno) <= 0)|| (ntohs(pkt->len)>512) ) {
+    if ( (ntohl(pkt->ackno) <= 0) || (ntohl(pkt->seqno) <= 0) || (ntohs(pkt->len)>512) ) {
         return 1;
     }
 
@@ -223,6 +223,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
             buffer_insert(r->rec_buffer, pkt, 0);
 
             if (ntohl(pkt->seqno) == r->rcv_nxt) { //packet is the next expected one-->try to output
+                
                 rel_output(r);
                 packet_t* ack = create_ack(r->rcv_nxt);
                 conn_sendpkt(r->c, ack, 8);
@@ -280,11 +281,11 @@ rel_read (rel_t *s)
            // struct buffer_node* next = s->temp_buf->head;
             packet_t* sendme = xmalloc(sendPkt+12); //sizeof struct pkt
             
-            for (int i=0;i<sendPkt;i++) {
+            for (unsigned int i=0;i<sendPkt;i++) {
                 sendme->data[i] = ((char *) s->temp_buf)[i]; //cast to char pointer from void *
 
             }
-            sendme = create_data(sendme,12,s->rcv_nxt,s->send_nxt);
+            sendme = create_data(sendme,12+sendPkt,s->rcv_nxt,s->send_nxt); //12+sendPkt instead of 12
             fprintf(stderr,"sending data from rel_read ... seqno=%08x\n",sendme->seqno);
             
             conn_sendpkt(s->c,sendme,ntohs(sendme->len));
@@ -349,10 +350,8 @@ rel_timer ()
         //for each sender, go through all nodes and check timeout
         buffer_node_t* curr_node = buffer_get_first(current->send_buffer);
         while (curr_node != NULL) {
-            long retr_timer = current->timeout; //in millisecs
-            long now = getTimeMs();
-            long time_passed = now - curr_node->last_retransmit;
-            if (time_passed >= retr_timer) {
+
+            if (getTimeMs() >= current->timeout + curr_node->last_retransmit) {
                 //packet should be resent
                 conn_sendpkt(current->c, &curr_node->packet,ntohs(curr_node->packet.len));
                 //update the time of now to that packet
