@@ -173,7 +173,7 @@ void
 rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
     //fprintf(stderr,"rel_recvpkt was called with packet ackno  %08x and checksum %04x\n", ntohl(pkt->ackno), (pkt->cksum));
-    if (is_corrupted(pkt) /*|| ntohs(pkt->len) != n*/) {
+    if (is_corrupted(pkt) || ntohs(pkt->len) != n) {
         fprintf(stderr, "packet was corrupted\n");
         //still send an ack 
         packet_t* ack = create_ack(r->rcv_nxt);
