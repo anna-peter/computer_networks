@@ -47,6 +47,24 @@ struct reliable_state {
 };
 rel_t *rel_list;
 
+
+// call this function to check whether EOF's have been sent & rec & buffers are empty
+// if all of this holds, the connection can be torn down w rel_destroy
+
+int canDestroy(rel_t *r) {
+    if ( r->rcv_eof && r->input_eof && !buffer_size(r->send_buffer) && !buffer_size(r->rec_buffer)) {
+        fprintf(stderr,"calling rel destroy but sending ack beforehand\n");
+        
+        packet_t* ack = create_ack(r->rcv_nxt);
+        conn_sendpkt(r->c,ack,8);
+        free(ack);
+        rel_destroy(r);
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
 //uses the internal clock to return the current time in milliseconds
 long getTimeMs() {
     struct timeval now;
@@ -200,13 +218,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
         fprintf(stderr,"received EOF bc pkt len 12\n");
         r->rcv_eof = 1;
     }
-    if ( r->rcv_eof && r->input_eof && !buffer_size(r->send_buffer) && !buffer_size(r->rec_buffer)) {
-        fprintf(stderr,"calling rel destroy but sending ack beforehand\n");
-        
-        packet_t* ack = create_ack(r->rcv_nxt);
-        conn_sendpkt(r->c,ack,8);
-        free(ack);
-        rel_destroy(r);
+    if ( canDestroy(r)) {
         return;
     }
     if (ntohl(pkt->seqno) < r->rcv_nxt + r->window) {
@@ -300,6 +312,9 @@ rel_read (rel_t *s)
         s->send_nxt++;
         //s->send_wndw = s->send_nxt - s->base_send;
     }
+    if (canDestroy(r)) {
+        return;
+    }
     
     /* Your logic implementation here */
 }
@@ -336,6 +351,9 @@ rel_output (rel_t *r)
     }
     //remove all outputtet packets from buffer
     buffer_remove(r->rec_buffer,r->rcv_nxt);
+    if (canDestroy(r)) {
+        return;
+    }
 }
 
 void
