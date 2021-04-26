@@ -55,14 +55,10 @@ int canDestroy(rel_t *r) {
     if ( r->rcv_eof && r->input_eof && !buffer_size(r->send_buffer) && !buffer_size(r->rec_buffer)) {
         fprintf(stderr,"calling rel destroy but sending ack beforehand\n");
         
-        packet_t* ack = create_ack(r->rcv_nxt);
-        conn_sendpkt(r->c,ack,8);
-        free(ack);
-        rel_destroy(r);
         return 1;
-    } else {
-        return 0;
-    }
+    } 
+    return 0;
+    
 }
 
 //uses the internal clock to return the current time in milliseconds
@@ -219,6 +215,10 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
         r->rcv_eof = 1;
     }
     if ( canDestroy(r)) {
+        packet_t* ack = create_ack(r->rcv_nxt);
+        conn_sendpkt(r->c,ack,8);
+        free(ack);
+        rel_destroy(r);
         return;
     }
     if (ntohl(pkt->seqno) < r->rcv_nxt + r->window) {
@@ -312,7 +312,11 @@ rel_read (rel_t *s)
         s->send_nxt++;
         //s->send_wndw = s->send_nxt - s->base_send;
     }
-    if (canDestroy(r)) {
+    if (canDestroy(s)) {
+        packet_t* ack = create_ack(s->rcv_nxt);
+        conn_sendpkt(s->c,ack,8);
+        free(ack);
+        rel_destroy(s);
         return;
     }
     
@@ -352,6 +356,10 @@ rel_output (rel_t *r)
     //remove all outputtet packets from buffer
     buffer_remove(r->rec_buffer,r->rcv_nxt);
     if (canDestroy(r)) {
+        packet_t* ack = create_ack(r->rcv_nxt);
+        conn_sendpkt(r->c,ack,8);
+        free(ack);
+        rel_destroy(r);
         return;
     }
 }
