@@ -311,14 +311,14 @@ rel_read (rel_t *s)
         }
         s->send_nxt++;
         //s->send_wndw = s->send_nxt - s->base_send;
+        if (canDestroy(s)) {
+            packet_t* ack = create_ack(s->rcv_nxt);
+            conn_sendpkt(s->c,ack,8);
+            free(ack);
+            rel_destroy(s);
+            return;
+        } //removed this bc otherwise window test not passed
     }
-    /*if (canDestroy(s)) {
-        packet_t* ack = create_ack(s->rcv_nxt);
-        conn_sendpkt(s->c,ack,8);
-        free(ack);
-        rel_destroy(s);
-        return;
-    }*/ //removed this bc otherwise window test not passed
     
     /* Your logic implementation here */
 }
